@@ -697,14 +697,14 @@ window.doChallengeAction=async()=>{
       deck:newDeck,
       [`players/${pa.actor}/influence`]:newInfluence,
       phase:'lose_influence',
-      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,losers:[myId],afterLose:'resume_action',ts:Date.now()}
+      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,losers:[myId],afterLose:'resume_action',ts:Date.now(),preRevealCounts:{[myId]:(r.players[myId].revealed||[]).length}}
     });
   } else {
     // Challenge succeeds: actor loses influence, action cancelled
     await log(`Challenge succeeded — ${actor.name} did not have ${reqCard}. Action cancelled.`,'system');
     await update(dbRoom(),{
       phase:'lose_influence',
-      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,losers:[pa.actor],afterLose:'cancel_action',ts:Date.now()}
+      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,losers:[pa.actor],afterLose:'cancel_action',ts:Date.now(),preRevealCounts:{[pa.actor]:(r.players[pa.actor].revealed||[]).length}}
     });
   }
 };
@@ -733,14 +733,14 @@ window.doChallengeBlock=async()=>{
       deck:shuffle(deck),
       [`players/${blockerId}/influence`]:newInf,
       phase:'lose_influence',
-      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,blockerId,losers:[myId],afterLose:'cancel_action',ts:Date.now()}
+      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,blockerId,losers:[myId],afterLose:'cancel_action',ts:Date.now(),preRevealCounts:{[myId]:(r.players[myId].revealed||[]).length}}
     });
   } else {
     // Block challenge succeeds: blocker loses influence, action resumes
     await log(`Block challenge succeeded — ${blocker.name} did not have ${claimedCard}. Action resumes.`,'system');
     await update(dbRoom(),{
       phase:'lose_influence',
-      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,losers:[blockerId],afterLose:'resume_action',ts:Date.now()}
+      pendingAction:{action:pa.action,actor:pa.actor,target:pa.target,losers:[blockerId],afterLose:'resume_action',ts:Date.now(),preRevealCounts:{[blockerId]:(r.players[blockerId].revealed||[]).length}}
     });
   }
 };
@@ -792,8 +792,8 @@ async function execAction(pa){
     await update(dbRoom(),{
       [`players/${pa.actor}/coins`]:actor.coins-7,
       phase:'lose_influence',
-      // Clean pendingAction with only what's needed
-      pendingAction:{action:'coup',actor:pa.actor,target:pa.target,losers:[pa.target],afterLose:'advance',ts:Date.now()}
+      pendingAction:{action:'coup',actor:pa.actor,target:pa.target,losers:[pa.target],afterLose:'advance',ts:Date.now(),
+        preRevealCounts:{[pa.target]:(r.players[pa.target].revealed||[]).length}}
     });
     await log(`${actor.name} launches a Coup against ${tgt.name}!`,'action');
 
@@ -802,7 +802,8 @@ async function execAction(pa){
     await update(dbRoom(),{
       [`players/${pa.actor}/coins`]:actor.coins-3,
       phase:'lose_influence',
-      pendingAction:{action:'assassinate',actor:pa.actor,target:pa.target,losers:[pa.target],afterLose:'advance',ts:Date.now()}
+      pendingAction:{action:'assassinate',actor:pa.actor,target:pa.target,losers:[pa.target],afterLose:'advance',ts:Date.now(),
+        preRevealCounts:{[pa.target]:(r.players[pa.target].revealed||[]).length}}
     });
     await log(`${actor.name} assassinates ${tgt.name}!`,'action');
 
@@ -839,8 +840,14 @@ function showLoseModal(choices){
       // Re-fetch to check if all losers are done
       const r2=await getRoom();
       const pa=r2.pendingAction; if(!pa) return;
-      const allDone=(pa.losers||[]).every(id=>eliminated(r2.players[id]));
-      if(!allDone) return; // another loser still picking
+      // Each loser must have revealed exactly 1 more card than before this action started
+      const preReveal=pa.preRevealCounts||{};
+      const allDone=(pa.losers||[]).every(id=>{
+        const pre=preReveal[id]||0;
+        const now=(r2.players[id]&&r2.players[id].revealed||[]).length;
+        return now>pre;
+      });
+      if(!allDone) return; // waiting for losers to reveal
       if(pa.afterLose==='advance'||pa.afterLose==='cancel_action'){
         await advanceTurn();
       } else if(pa.afterLose==='resume_action'){
